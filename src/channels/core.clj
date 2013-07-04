@@ -3,58 +3,47 @@
 
 ;; 1) demonstrate routing w/ interceptor that matches something in request and invokes another vector of interceptors
 ;; 2) update make-processor to detect if interceptor threw exception OR returned exception through channel and rethrow
+;; 3) fix short-circuit code so that subset of leave fns run - "unwinding" the "stack"
 
 (defn channel? [c] (instance? clojure.core.async.impl.protocols.Channel c))
 
 
 (defn make-processor
-  [fs]
+  [interceptors]
   (fn 
     [ctx]
-    (let [enters (map first fs)
-          leaves (reverse (map second fs))]
-      (go 
-       (try
-         (let [entered (loop [f (first enters)
-                              fs (rest enters)
-                              ctx ctx]
-                         (let [res (f ctx)
-                               real-res (if (channel? res)
-                                          (<! res)
-                                          res)]
-                           (println "Entering" f real-res (nil? (real-res :response)) (empty? fs))
-                           (if (or (empty? fs) (real-res :response))
-                             (do (println "real-res" real-res)
-                                 real-res)
-                             (do (println "recurring")
-                                 (recur (first fs) (rest fs) real-res)))))]
-           (println "Entered" entered)
-           (if (nil? (entered :response))
-             (do (println "Processing")
-                 (let [processed (do (Thread/sleep 5000)
-                                     (assoc entered :response {:body "done!"}))]
-                   (println "Processed")
-                   (loop [f (first leaves)
-                          fs (rest leaves)
-                          ctx processed]
-                     (let [res (f ctx)
-                           real-res (if (channel? res)
-                                      (<! res)
-                                      res)]
-                       (println "Leaving" f real-res)
-                       (if-not (empty? fs)
-                         (recur (first fs) (rest fs) real-res)
-                         real-res)))))
-             (do (println "Short-circuiting")
-                 entered)))
-         (catch Exception ex
-           ex))))))
+    (go 
+     (try
+       (loop [[enter leave] (first interceptors)
+              interceptors (rest interceptors)
+              leave-stack nil
+              ctx ctx]
+         (let [res (if enter (enter ctx) ctx)
+               real-res (if (channel? res)
+                          (<! res)
+                          res)]
+           (if (or (empty? interceptors) (real-res :response))
+             (do ;; have to unwind leave stack here
+               (println "REVERSING")
+               (loop [leave (peek leave-stack)
+                      leave-stack (pop leave-stack)
+                      ctx real-res]
+                 (let [res (if leave (leave ctx) ctx)
+                       real-res (if (channel? res)
+                                  (<! res)
+                                  res)]
+                   (if-not (empty? leave-stack)
+                     (recur (peek leave-stack) (pop leave-stack) real-res)
+                     real-res))))
+             (recur (first interceptors) (rest interceptors) (conj leave-stack leave) real-res))))
+       (catch Exception ex ex)))))
 
 (defn exception? [e] (instance? Exception e))
 
 (defn process-result
   [in]
   (let [result (<!! in)]
+    (println "RESULT" result (type result))
     (if-not (exception? result)
       (if-let [body (get-in result [:response :body])]
         (cond
@@ -68,17 +57,24 @@
         (println "Unexpected result" result))
       (println result))))
 
-(def test-fns [(fn [ctx] (update-in ctx [:enter] (fnil inc 0)))
-               (fn [ctx] (update-in ctx [:leave] (fnil inc 0)))])
+(def test-fns [(fn [ctx] (println "test-fns enter") (update-in ctx [:enter] (fnil inc 0)))
+               (fn [ctx] (println "test-fns leave") (update-in ctx [:leave] (fnil inc 0)))])
 
-(def test-fns-async [(fn [ctx] (go (Thread/sleep 3000) (update-in ctx [:enter] (fnil inc 0))))
-                     (fn [ctx] (go (Thread/sleep 3000) (update-in ctx [:leave] (fnil inc 0))))])
+(def test-fns-async [(fn [ctx]
+                       (println "test-fns-async enter")
+                       (go (Thread/sleep 3000) (update-in ctx [:enter] (fnil inc 0))))
+                     (fn [ctx]
+                       (println "test-fns-async leave")
+                       (go (Thread/sleep 3000) (update-in ctx [:leave] (fnil inc 0))))])
 
-(def test-fns-except [(fn [ctx] (throw (ex-info "Ow!" {})))])
+(def test-fns-except [(fn [ctx] (println "test-fns-except enter") (throw (ex-info "Ow!" {})))])
 
-(def test-fns-short-circuit [(fn [ctx] (assoc ctx :response {:body "done early!"}))])
+(def test-fns-short-circuit [(fn [ctx]
+                               (println "test-gns-short-circuit enter")
+                               (assoc ctx :response {:body "done early!"}))])
 
 (def test-fns-events [(fn [ctx]
+                        (println "test-fns-events enter")
                         (let [pipe (chan)]
                           (go
                            (dotimes [i 10]
@@ -87,13 +83,17 @@
                            (close! pipe))
                           (assoc ctx :response {:body pipe})))])
 
+(def test-handler [(fn [ctx]
+                     (println "test-handler enter")
+                     (Thread/sleep 5000)
+                     (assoc ctx :response {:body "done!"}))])
 
 (comment
 
-(def proc (make-processor [test-fns test-fns]))
+(def proc (make-processor [test-fns test-fns test-handler]))
 (process-result (proc {}))
 
-(def proc (make-processor [test-fns test-fns test-fns-async]))
+(def proc (make-processor [test-fns test-fns test-fns-async test-handler]))
 (process-result (proc {}))
 
 (def proc (make-processor [test-fns test-fns test-fns-async test-fns-except]))
