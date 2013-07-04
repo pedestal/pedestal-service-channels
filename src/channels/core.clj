@@ -2,8 +2,11 @@
   (:require [clojure.core.async :as async :refer [<!! >!! <! >! go chan close!]]))
 
 ;; 1) demonstrate routing w/ interceptor that matches something in request and invokes another vector of interceptors
-;; 2) update make-processor to detect if interceptor threw exception OR returned exception through channel and rethrow
-;; 3) fix short-circuit code so that subset of leave fns run - "unwinding" the "stack"
+;;   a) for make-processor, router interceptor should route and invoke the selected interceptors
+;;   b) for processor, router interceptor should route and queue selected interceptors
+;; 2) update make-processor to detect if interceptor threw exception OR returned exception through channel
+;;   a) rethrow it
+;;   b) add error fn to interceptor definition (may want to switch from vector to map) and emulate current interceptor logic (?)
 
 (defn channel? [c] (instance? clojure.core.async.impl.protocols.Channel c))
 
