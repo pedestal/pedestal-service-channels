@@ -96,10 +96,18 @@
 
 (def test-fns-async [(fn [ctx]
                        (println "test-fns-async enter")
-                       (go (Thread/sleep 3000) (update-in ctx [:enter] (fnil inc 0))))
+                       (let [res (chan)]
+                         (future
+                           (Thread/sleep 3000)
+                           (>!! res (update-in ctx [:enter] (fnil inc 0))))
+                         (go (<! res))))
                      (fn [ctx]
                        (println "test-fns-async leave")
-                       (go (Thread/sleep 3000) (update-in ctx [:leave] (fnil inc 0))))])
+                       (let [res (chan)]
+                         (future
+                           (Thread/sleep 3000)
+                           (>!! res (update-in ctx [:leave] (fnil inc 0))))
+                         (go (<! res))))])
 
 (def test-fns-except [(fn [ctx] (println "test-fns-except enter") (throw (ex-info "Ow!" {})))])
 
