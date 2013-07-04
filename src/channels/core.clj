@@ -38,6 +38,40 @@
              (recur (first interceptors) (rest interceptors) (conj leave-stack leave) real-res))))
        (catch Exception ex ex)))))
 
+(defn processor
+  [ctx]
+  (go 
+   (try
+     (loop [ctx ctx]
+       (let [queue (ctx ::queue)
+             [enter leave] (peek queue)
+             stack (ctx ::stack)
+             new-ctx (-> ctx
+                         (assoc ::queue (pop queue))
+                         (assoc ::stack (conj stack leave)))]
+         (let [res (if enter (enter new-ctx) new-ctx)
+               real-res (if (channel? res)
+                          (<! res)
+                          res)]
+           (if (or (empty? queue) (real-res :response))
+             (do ;; have to unwind leave stack here
+               (println "REVERSING")
+               (loop [ctx real-res]
+                 (let [stack (ctx ::stack)
+                       leave (peek stack)
+                       ctx real-res
+                       new-ctx (-> ctx
+                                   (assoc ::stack (when-not (empty? stack) (pop stack))))]
+                   (let [res (if leave (leave new-ctx) new-ctx)
+                         real-res (if (channel? res)
+                                    (<! res)
+                                    res)]
+                     (if (empty? stack)
+                       real-res
+                       (recur real-res))))))
+             (recur real-res)))))
+     (catch Exception ex ex))))
+
 (defn exception? [e] (instance? Exception e))
 
 (defn process-result
@@ -101,5 +135,22 @@
 
 (def proc (make-processor [test-fns test-fns test-fns-async test-fns-events]))
 (process-result (proc {}))
+
+(process-result
+ (processor
+  {::queue (into clojure.lang.PersistentQueue/EMPTY [test-fns test-fns test-handler])}))
+
+(process-result
+ (processor
+  {::queue (into clojure.lang.PersistentQueue/EMPTY [test-fns test-fns test-fns-async test-handler])}))
+
+(process-result
+ (processor
+  {::queue (into clojure.lang.PersistentQueue/EMPTY [test-fns test-fns test-fns-async test-fns-except])}))
+
+(process-result
+ (processor
+  {::queue (into clojure.lang.PersistentQueue/EMPTY [test-fns test-fns test-fns-async test-fns-events])}))
+
 
 )
