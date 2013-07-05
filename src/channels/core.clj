@@ -13,9 +13,9 @@
 
 (defn make-processor
   [interceptors]
-  (fn 
+  (fn
     [ctx]
-    (go 
+    (go
      (try
        (loop [[enter leave] (first interceptors)
               interceptors (rest interceptors)
@@ -43,7 +43,7 @@
 
 (defn processor
   [ctx]
-  (go 
+  (go
    (try
      (loop [ctx ctx]
        (let [queue (ctx ::queue)
