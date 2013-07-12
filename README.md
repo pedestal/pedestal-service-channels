@@ -1,13 +1,15 @@
 # channels
 
-A Clojure library designed to ... well, that part is up to you.
+This repo contains a prototype of the Pedestal services interceptor
+engine built on core.async channels.
 
-## Usage
+It does use Pedestal, but does demonstrate all of the necessary
+functionality.
 
-FIXME
+This work will be the basis for moving the services infrastructure
+onto core.async, after several questions have been answered...
 
-## License
+<!-- Copyright 2013 Relevance, Inc. -->
 
-Copyright © 2013 FIXME
 
-Distributed under the Eclipse Public License, the same as Clojure.
+
