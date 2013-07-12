@@ -21,6 +21,8 @@
                real-res (if (channel? res)
                           (<! res)
                           res)]
+           (when (instance? java.lang.Throwable real-res)
+             (throw real-res))
            (if (or (empty? interceptors) (real-res :response))
              (do ;; have to unwind leave stack here
                (println "REVERSING")
@@ -31,6 +33,8 @@
                        real-res (if (channel? res)
                                   (<! res)
                                   res)]
+                   (when (instance? java.lang.Throwable real-res)
+                     (throw real-res))
                    (if-not (empty? leave-stack)
                      (recur (peek leave-stack) (pop leave-stack) real-res)
                      real-res))))
@@ -94,18 +98,23 @@
 
 (def test-fns-async [(fn [ctx]
                        (println "test-fns-async enter")
-                       (let [res (chan)]
-                         (thread
-                           (Thread/sleep 3000)
-                           (>!! res (update-in ctx [:enter] (fnil inc 0))))
-                         (go (<! res))))
+                       (thread
+                        (Thread/sleep 3000)
+                        (update-in ctx [:enter] (fnil inc 0))))
                      (fn [ctx]
                        (println "test-fns-async leave")
-                       (let [res (chan)]
-                         (thread
-                           (Thread/sleep 3000)
-                           (>!! res (update-in ctx [:leave] (fnil inc 0))))
-                         (go (<! res))))])
+                       (thread
+                        (Thread/sleep 3000)
+                        (update-in ctx [:leave] (fnil inc 0))))])
+
+(def test-fns-async-except [(fn [ctx]
+                              (println "test-fns-async enter")
+                              (thread
+                               (try
+                                 (Thread/sleep 3000)
+                                 (throw (ex-info "Ow!" {}))
+                                 (update-in ctx [:enter] (fnil inc 0))
+                                 (catch Throwable t t))))])
 
 (def test-fns-except [(fn [ctx] (println "test-fns-except enter") (throw (ex-info "Ow!" {})))])
 
@@ -174,8 +183,8 @@
   ;; (def proc (make-processor [test-fns test-fns test-fns-async test-handler] ::router router))
   ;; (process-result (proc quadruple-request))
 
-  ;; (def proc (make-processor [test-fns test-fns test-fns-async test-fns-except] ::router router))
-  ;; (process-result (proc quadruple-request))
+  (def proc (make-processor [test-fns test-fns test-fns-async #_test-fns-except]))
+  (process-result (proc {}))
 
   ;; (def proc (make-processor [test-fns test-fns test-fns-async test-fns-events] ::router router))
   ;; (process-result (proc quadruple-request))
