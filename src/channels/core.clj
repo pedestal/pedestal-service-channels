@@ -13,7 +13,7 @@
     [ctx]
     (go
      (try
-       (loop [[enter leave] (first interceptors)
+       (loop [{enter :enter leave :leave} (first interceptors)
               interceptors (rest interceptors)
               leave-stack nil
               ctx ctx]
@@ -47,7 +47,7 @@
    (try
      (loop [ctx ctx]
        (let [queue (ctx ::queue)
-             [enter leave] (peek queue)
+             {enter :enter leave :leave} (peek queue)
              stack (ctx ::stack)
              new-ctx (-> ctx
                          (assoc ::queue (pop queue))
@@ -93,52 +93,52 @@
         (println "Unexpected result" result))
       (println result))))
 
-(def test-fns [(fn [ctx] (println "test-fns enter") (update-in ctx [:enter] (fnil inc 0)))
-               (fn [ctx] (println "test-fns leave") (update-in ctx [:leave] (fnil inc 0)))])
+(def test-fns {:enter (fn [ctx] (println "test-fns enter") (update-in ctx [:enter] (fnil inc 0)))
+               :leave (fn [ctx] (println "test-fns leave") (update-in ctx [:leave] (fnil inc 0)))})
 
-(def test-fns-async [(fn [ctx]
-                       (println "test-fns-async enter")
-                       (thread
-                        (Thread/sleep 3000)
-                        (update-in ctx [:enter] (fnil inc 0))))
-                     (fn [ctx]
-                       (println "test-fns-async leave")
-                       (thread
-                        (Thread/sleep 3000)
-                        (update-in ctx [:leave] (fnil inc 0))))])
-
-(def test-fns-async-except [(fn [ctx]
+(def test-fns-async {:enter (fn [ctx]
                               (println "test-fns-async enter")
                               (thread
-                               (try
-                                 (Thread/sleep 3000)
-                                 (throw (ex-info "Ow!" {}))
-                                 (update-in ctx [:enter] (fnil inc 0))
-                                 (catch Throwable t t))))])
+                               (Thread/sleep 3000)
+                               (update-in ctx [:enter] (fnil inc 0))))
+                     :leave (fn [ctx]
+                              (println "test-fns-async leave")
+                              (thread
+                               (Thread/sleep 3000)
+                               (update-in ctx [:leave] (fnil inc 0))))})
 
-(def test-fns-except [(fn [ctx] (println "test-fns-except enter") (throw (ex-info "Ow!" {})))])
+(def test-fns-async-except {:enter (fn [ctx]
+                                     (println "test-fns-async enter")
+                                     (thread
+                                      (try
+                                        (Thread/sleep 3000)
+                                        (throw (ex-info "Ow!" {}))
+                                        (update-in ctx [:enter] (fnil inc 0))
+                                        (catch Throwable t t))))})
 
-(def test-fns-short-circuit [(fn [ctx]
-                               (println "test-fns-short-circuit enter")
-                               (assoc ctx :response {:body "done early!"}))])
+(def test-fns-except {:enter (fn [ctx] (println "test-fns-except enter") (throw (ex-info "Ow!" {})))})
 
-(def test-fns-events [(fn [ctx]
-                        (println "test-fns-events enter")
-                        (let [pipe (chan)]
-                          (go
-                           (dotimes [i 10]
-                             (Thread/sleep 2000)
-                             (>! pipe (str "event " i)))
-                           (close! pipe))
-                          (assoc ctx :response {:body pipe})))])
+(def test-fns-short-circuit {:enter (fn [ctx]
+                                      (println "test-fns-short-circuit enter")
+                                      (assoc ctx :response {:body "done early!"}))})
 
-(def test-handler [(fn [ctx]
-                     (println "test-handler enter")
-                     (Thread/sleep 5000)
-                     (assoc ctx :response {:body "done!"}))])
+(def test-fns-events {:enter (fn [ctx]
+                               (println "test-fns-events enter")
+                               (let [pipe (chan)]
+                                 (go
+                                  (dotimes [i 10]
+                                    (Thread/sleep 2000)
+                                    (>! pipe (str "event " i)))
+                                  (close! pipe))
+                                 (assoc ctx :response {:body pipe})))})
 
-(def double-routes [(fn [ctx] (println "double-route enter") (update-in ctx [:enter] (fnil #(* % 2) 1)))
-                    (fn [ctx] (println "double-route leave") (update-in ctx [:leave] (fnil #(* % 2) 1)))])
+(def test-handler {:enter (fn [ctx]
+                            (println "test-handler enter")
+                            (Thread/sleep 5000)
+                            (assoc ctx :response {:body "done!"}))})
+
+(def double-routes {:enter (fn [ctx] (println "double-route enter") (update-in ctx [:enter] (fnil #(* % 2) 1)))
+                    :leave (fn [ctx] (println "double-route leave") (update-in ctx [:leave] (fnil #(* % 2) 1)))})
 
 (def routes [{:route-name :double
               :path "double"
@@ -153,21 +153,21 @@
     (if-let [matched-route (some #(when (= path (:path %)) %) routes)]
       matched-route)))
 
-(def test-router-1 [(fn [ctx]
-                      (let [matched-route (matched-route ctx routes)
-                            ctx (assoc ctx :route matched-route)
-                            route-interceptors (:interceptors matched-route)]
-                        ((make-processor route-interceptors) ctx)))]) ;; adds another go block
+(def test-router-1 {:enter (fn [ctx]
+                             (let [matched-route (matched-route ctx routes)
+                                   ctx (assoc ctx :route matched-route)
+                                   route-interceptors (:interceptors matched-route)]
+                               ((make-processor route-interceptors) ctx)))}) ;; adds another go block
 
-(def test-router-2 [(fn [ctx]
-                      (let [matched-route (matched-route ctx routes)
-                            ctx (assoc ctx :route matched-route)
-                            route-interceptors (:interceptors matched-route)]
-                        (println "MATCHED ROUTE" matched-route)
-                        (println "ROUTE INTERCEPTORS" route-interceptors)
-                        (update-in ctx [::queue]
-                                   (fnil into clojure.lang.PersistentQueue/EMPTY)
-                                   route-interceptors)))]) ;; adds interceptors to existing go block
+(def test-router-2 {:enter (fn [ctx]
+                             (let [matched-route (matched-route ctx routes)
+                                   ctx (assoc ctx :route matched-route)
+                                   route-interceptors (:interceptors matched-route)]
+                               (println "MATCHED ROUTE" matched-route)
+                               (println "ROUTE INTERCEPTORS" route-interceptors)
+                               (update-in ctx [::queue]
+                                          (fnil into clojure.lang.PersistentQueue/EMPTY)
+                                          route-interceptors)))}) ;; adds interceptors to existing go block
 
 (def double-request {:request {:path "double"}})
 (def quadruple-request {:request {:path "quadruple"}})
