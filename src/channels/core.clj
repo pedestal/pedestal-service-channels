@@ -119,7 +119,7 @@
 (def test-fns-except [(fn [ctx] (println "test-fns-except enter") (throw (ex-info "Ow!" {})))])
 
 (def test-fns-short-circuit [(fn [ctx]
-                               (println "test-gns-short-circuit enter")
+                               (println "test-fns-short-circuit enter")
                                (assoc ctx :response {:body "done early!"}))])
 
 (def test-fns-events [(fn [ctx]
@@ -153,13 +153,13 @@
     (if-let [matched-route (some #(when (= path (:path %)) %) routes)]
       matched-route)))
 
-(def test-router-1 [(fn [ctx] 
+(def test-router-1 [(fn [ctx]
                       (let [matched-route (matched-route ctx routes)
                             ctx (assoc ctx :route matched-route)
                             route-interceptors (:interceptors matched-route)]
                         ((make-processor route-interceptors) ctx)))]) ;; adds another go block
 
-(def test-router-2 [(fn [ctx] 
+(def test-router-2 [(fn [ctx]
                       (let [matched-route (matched-route ctx routes)
                             ctx (assoc ctx :route matched-route)
                             route-interceptors (:interceptors matched-route)]
@@ -175,20 +175,23 @@
 (comment
   (def proc (make-processor [test-fns test-fns test-router-1]))
 
+  ;; Returns Unexpected result, since there is no request path
   (process-result (proc {:request nil}))
+  ;; Returns Unexpected result, since there is an invalid request path
   (process-result (proc {:request {:path "foo"}}))
   (process-result (proc double-request))
   (process-result (proc quadruple-request))
 
-  ;; (def proc (make-processor [test-fns test-fns test-fns-async test-handler] ::router router))
-  ;; (process-result (proc quadruple-request))
+  (def proc (make-processor [test-fns test-fns test-fns-async test-router-1]))
+  (process-result (proc double-request))
 
-  (def proc (make-processor [test-fns test-fns test-fns-async #_test-fns-except]))
-  (process-result (proc {}))
+  (def proc (make-processor [test-fns test-fns test-fns-async test-fns-except test-router-1]))
+  (process-result (proc double-request))
 
-  ;; (def proc (make-processor [test-fns test-fns test-fns-async test-fns-events] ::router router))
-  ;; (process-result (proc quadruple-request))
+  (def proc (make-processor [test-fns test-fns test-fns-async test-fns-events test-router-1]))
+  (process-result (proc double-request))
 
+  ;; Returns Unexpected result, since there is no request path
   (process-result
    (processor
     {::queue (into clojure.lang.PersistentQueue/EMPTY [test-fns test-fns test-router-2])}))
@@ -197,19 +200,15 @@
    (processor
     (merge double-request {::queue (into clojure.lang.PersistentQueue/EMPTY [test-fns test-fns test-router-2])})))
 
-  ;; (process-result
-  ;;  (processor
-  ;;   (merge quadruple-request {::queue (into clojure.lang.PersistentQueue/EMPTY [test-fns test-fns test-handler]) ::router router})))
+  (process-result
+   (processor
+    (merge double-request {::queue (into clojure.lang.PersistentQueue/EMPTY [test-fns test-fns test-fns-async test-router-2])})))
 
-  ;; (process-result
-  ;;  (processor
-  ;;   (merge quadruple-request {::queue (into clojure.lang.PersistentQueue/EMPTY [test-fns test-fns test-fns-async test-handler]) ::router router})))
+  (process-result
+   (processor
+    (merge double-request {::queue (into clojure.lang.PersistentQueue/EMPTY [test-fns test-fns test-fns-async test-fns-except test-router-2])})))
 
-  ;; (process-result
-  ;;  (processor
-  ;;   (merge quadruple-request {::queue (into clojure.lang.PersistentQueue/EMPTY [test-fns test-fns test-fns-async test-fns-except]) ::router router})))
-
-  ;; (process-result
-  ;;  (processor
-  ;;   (merge quadruple-request {::queue (into clojure.lang.PersistentQueue/EMPTY [test-fns test-fns test-fns-async test-fns-events]) ::router router})))
+  (process-result
+   (processor
+    (merge double-request {::queue (into clojure.lang.PersistentQueue/EMPTY [test-fns test-fns test-fns-async test-fns-events test-router-2])})))
   )
