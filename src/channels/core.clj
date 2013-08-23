@@ -1,48 +1,51 @@
 (ns channels.core
   (:require [clojure.core.async :as async :refer [<!! >!! <! >! go chan close! thread]]))
 
-;; #TODO add error fn to interceptor definition and emulate current interceptor logic (?)
+;; #TODO update processor to do error processing, similar to make-processor
 
 (defn channel? [c] (instance? clojure.core.async.impl.protocols.Channel c))
+
+(defn- try-f
+  [f context]
+  (go (let [res (if f (try (f context)
+                           (catch Throwable t t))
+                    context)
+            real-res (if (channel? res)
+                       (<! res)
+                       res)]
+        (if (instance? Throwable real-res)
+          (conj context {::error real-res})
+          real-res))))
+
+(defn- leave-all
+  [context interceptors]
+  (println "REVERSING")
+  (go
+   (loop [leave (peek interceptors)
+          leave-stack (pop interceptors)
+          ctx context]
+     (let [error-fn (:error leave)
+           res (<! (if (::error ctx)
+                     (try-f error-fn ctx)
+                     (try-f (:leave leave) ctx)))]
+       (if-not (empty? leave-stack)
+         (recur (peek leave-stack) (pop leave-stack) res)
+         res)))))
+
 
 (defn make-processor
   [interceptors]
   (fn
     [ctx]
     (go
-     (try
-       (loop [{enter :enter leave :leave} (first interceptors)
-              interceptors (rest interceptors)
-              leave-stack nil
-              ctx ctx]
-         (let [res (if enter (try (enter ctx)
-                                  (catch Throwable t t))
-                       ctx)
-               real-res (if (channel? res)
-                          (<! res)
-                          res)]
-           (when (instance? Throwable real-res)
-             (throw real-res))
-           (if (or (empty? interceptors) (real-res :response))
-             (do ;; have to unwind leave stack here
-               (println "REVERSING")
-               (loop [leave (peek leave-stack)
-                      leave-stack (pop leave-stack)
-                      ctx real-res]
-                 (let [res (if leave (try (leave ctx)
-                                          (catch Throwable t t))
-                               ctx)
-                       real-res (if (channel? res)
-                                  (<! res)
-                                  res)]
-                   (when (instance? Throwable real-res)
-                     (throw real-res))
-                   (if-not (empty? leave-stack)
-                     (recur (peek leave-stack) (pop leave-stack) real-res)
-                     real-res))))
-             (recur (first interceptors) (rest interceptors) (conj leave-stack leave) real-res))))
-       (catch Throwable t
-         t)))))
+     (loop [{enter :enter} (first interceptors)
+            interceptors (rest interceptors)
+            leave-stack nil
+            ctx ctx]
+       (let [res (<! (try-f enter ctx))]
+         (if (or (empty? interceptors) (::error res) (:response res))
+           (<! (leave-all res leave-stack))
+           (recur (first interceptors) (rest interceptors) (conj leave-stack (first interceptors)) res)))))))
 
 (defn processor
   [ctx]
@@ -85,7 +88,7 @@
      (catch Throwable t
        t))))
 
-(defn exception? [e] (instance? Throwable e))
+(defn exception? [r] (or (instance? Throwable r) (::error r)))
 
 (defn process-result
   [in]
@@ -128,6 +131,10 @@
                                         (catch Throwable t t))))})
 
 (def test-fns-except {:enter (fn [ctx] (println "test-fns-except enter") (throw (ex-info "Ow!" {})))})
+(def test-fns-except-on-leave {:leave (fn [ctx] (println "test-fns-except leave") (throw (ex-info "Ow!" {})))})
+
+(def test-fns-except-handle {:enter (fn [ctx] (println "test-fns-except-handle enter") (update-in ctx [:enter] (fnil inc 0)))
+                             :error (fn [ctx] (println "test-fns-except-handle error") (update-in ctx [:error] (fnil inc 0)))})
 
 (def test-fns-channel-except {:enter (fn [ctx] (println "test-fns-channel-except enter")
                                        (let [pipe (chan)]
@@ -206,7 +213,16 @@
   (def proc (make-processor [test-fns test-fns test-fns-async test-fns-except test-router-1]))
   (process-result (proc double-request))
 
+  (def proc (make-processor [test-fns test-fns test-fns-async test-fns-except-handle test-fns-except test-router-1]))
+  (process-result (proc double-request))
+
+  (def proc (make-processor [test-fns test-fns test-fns-async test-fns-except-handle test-fns-except-on-leave test-router-1]))
+  (process-result (proc double-request))
+
   (def proc (make-processor [test-fns test-fns test-fns-channel-except test-router-1]))
+  (process-result (proc double-request))
+
+  (def proc (make-processor [test-fns test-fns test-fns-except-handle test-fns-channel-except test-router-1]))
   (process-result (proc double-request))
 
   (def proc (make-processor [test-fns test-fns test-fns-async test-fns-events test-router-1]))
