@@ -1,36 +1,35 @@
 (ns channels.core
   (:require [clojure.core.async :as async :refer [<!! >!! <! >! go chan close! thread]]))
 
-;; #TODO update processor to do error processing, similar to make-processor
-
 (defn channel? [c] (instance? clojure.core.async.impl.protocols.Channel c))
 
 (defn- try-f
   [f context]
-  (go (let [res (if f (try (f context)
-                           (catch Throwable t t))
-                    context)
-            real-res (if (channel? res)
-                       (<! res)
-                       res)]
-        (if (instance? Throwable real-res)
-          (conj context {::error real-res})
-          real-res))))
+  (go
+   (let [res (if f (try (f context)
+                        (catch Throwable t t))
+                 context)
+         real-res (if (channel? res)
+                    (<! res)
+                    res)]
+     (if (instance? Throwable real-res)
+       (conj context {::error real-res})
+       real-res))))
 
 (defn- leave-all
   [context interceptors]
   (println "REVERSING")
   (go
-   (loop [leave (peek interceptors)
-          leave-stack (pop interceptors)
+   (loop [leave-stack (pop interceptors)
+          leave (peek interceptors)
           ctx context]
      (let [error-fn (:error leave)
            res (<! (if (::error ctx)
                      (try-f error-fn ctx)
                      (try-f (:leave leave) ctx)))]
-       (if-not (empty? leave-stack)
-         (recur (peek leave-stack) (pop leave-stack) res)
-         res)))))
+       (if (empty? leave-stack)
+         res
+         (recur (peek leave-stack) (pop leave-stack) res))))))
 
 
 (defn make-processor
@@ -38,8 +37,8 @@
   (fn
     [ctx]
     (go
-     (loop [{enter :enter} (first interceptors)
-            interceptors (rest interceptors)
+     (loop [interceptors (rest interceptors)
+            {enter :enter} (first interceptors)
             leave-stack nil
             ctx ctx]
        (let [res (<! (try-f enter ctx))]
@@ -47,46 +46,37 @@
            (<! (leave-all res leave-stack))
            (recur (first interceptors) (rest interceptors) (conj leave-stack (first interceptors)) res)))))))
 
-(defn processor
-  [ctx]
+(defn- leave-all-queue
+  [context]
+  (println "REVERSING")
   (go
-   (try
-     (loop [ctx ctx]
-       (let [queue (ctx ::queue)
-             {enter :enter leave :leave} (peek queue)
-             stack (ctx ::stack)
-             new-ctx (-> ctx
-                         (assoc ::queue (pop queue))
-                         (assoc ::stack (conj stack leave)))]
-         (let [res (if enter (try (enter new-ctx)
-                                  (catch Throwable t t))
-                       new-ctx)
-               real-res (if (channel? res)
-                          (<! res)
-                          res)]
-           (when (instance? Throwable real-res)
-             (throw real-res))
-           (if (or (empty? queue) (real-res :response))
-             (do ;; have to unwind leave stack here
-               (println "REVERSING")
-               (loop [ctx real-res]
-                 (let [stack (ctx ::stack)
-                       leave (peek stack)
-                       new-ctx (-> ctx
-                                   (assoc ::stack (when-not (empty? stack) (pop stack))))]
-                   (let [res (if leave (try (leave new-ctx)
-                                            (catch Throwable t t)) new-ctx)
-                         real-res (if (channel? res)
-                                    (<! res)
-                                    res)]
-                     (when (instance? Throwable real-res)
-                       (throw real-res))
-                     (if (empty? stack)
-                       real-res
-                       (recur real-res))))))
-             (recur real-res)))))
-     (catch Throwable t
-       t))))
+   (loop [ctx context]
+     (let [stack (ctx ::stack)
+           leave (peek stack)
+           ctx (-> ctx
+                   (assoc ::stack (when-not (empty? stack) (pop stack))))]
+       (let [error-fn (:error leave)
+             res (<! (if (::error ctx)
+                       (try-f error-fn ctx)
+                       (try-f leave ctx)))]
+         (if (empty? stack)
+           res
+           (recur res)))))))
+
+(defn processor
+  [context]
+  (go
+   (loop [ctx context]
+     (let [queue (::queue ctx)
+           {enter :enter leave :leave} (peek queue)
+           stack (::stack ctx)
+           ctx (-> ctx
+                       (assoc ::queue (pop queue))
+                       (assoc ::stack (conj stack leave)))]
+       (let [res (<! (try-f enter ctx))]
+         (if (or (empty? queue) (::error res) (:response res))
+           (<! (leave-all-queue res))
+           (recur res)))))))
 
 (defn exception? [r] (or (instance? Throwable r) (::error r)))
 
@@ -240,6 +230,10 @@
   (process-result
    (processor
     (merge double-request {::queue (into clojure.lang.PersistentQueue/EMPTY [test-fns test-fns test-fns-channel-except test-router-2])})))
+
+  (process-result
+   (processor
+    (merge double-request {::queue (into clojure.lang.PersistentQueue/EMPTY [test-fns test-fns test-fns-except-handle test-fns-channel-except test-router-2])})))
 
   (process-result
    (processor
